@@ -1,3 +1,8 @@
+// 【新增顶部容错：兼容group-chat.js全局清理函数，避免加载先后报错】
+if(typeof fullChatClear !== "function"){
+    window.fullChatClear = function(){};
+}
+
 let envelopeData = { outbox: [], inbox: [], spacetime: [] };
 let currentEnvTab = 'outbox';
 let editingEnvId = null;
@@ -7,7 +12,7 @@ let editingEnvSection = null;
 function getOriginalContent(section, id) {
     if (!section || !id) return '';
     const letters = section === 'spacetime' ? envelopeData.spacetime : section === 'inbox' ? envelopeData.inbox : envelopeData.outbox;
-    const letter = letters.find(l => l.id === id);
+    const letter = letters.find(l => l.id);
     return letter ? letter.content : '';
 } 
 
@@ -117,14 +122,14 @@ function showEnvelopeReplyPopup(letter) {
             </div>
         </div>
         <div style="display:flex;gap:8px;">
-            <button onclick="document.getElementById('envelope-reply-popup').remove();if(typeof clearChatView === 'function') clearChatView();" style="flex:1;padding:8px 0;border-radius:12px;border:1px solid var(--border-color);background:var(--primary-bg);color:var(--text-secondary);font-size:13px;cursor:pointer;">稍后查看</button>
+            <button onclick="document.getElementById('envelope-reply-popup').remove();fullChatView();" style="flex:1;padding:8px 0;border-radius:12px;border:1px solid var(--border-color);background:var(--primary-bg);color:var(--text-secondary);font-size:13px;cursor:pointer;">稍后查看</button>
             <button onclick="openEnvelopeAndViewReply('${letter.id}');" style="flex:2;padding:8px 0;border-radius:12px;border:none;background:var(--accent-color);color:#fff;font-size:13px;font-weight:600;cursor:pointer;">立即阅读 ✉</button>
         </div>`;
     document.body.appendChild(popup);
     setTimeout(() => { 
         if (popup.parentNode) {
             popup.remove();
-            if(typeof clearChatView === 'function') clearChatView();
+            fullChatClear();
         }
     }, 8000);
 }
@@ -171,7 +176,7 @@ window.hideAppearancePanel = function() {
 window.openEnvelopeAndViewReply = function(replyId) {
     const popup = document.getElementById('envelope-reply-popup');
     if (popup) popup.remove();
-    if(typeof clearChatView === 'function') clearChatView();
+    fullChatClear();
     const envelopeModal = document.getElementById('envelope-modal');
     showModal(envelopeModal);
     setTimeout(() => {
@@ -216,7 +221,7 @@ function renderEnvelopeLists() {
     renderOutboxList();
     renderInboxList();
     renderSpacetimeList();
-    const pendingCount = envelopeData.outbox.filter(l => l.status === 'pending').length;
+    const pendingCount = envelopeData.out.filter(l => l.status === 'pending').length;
     const newInboxCount = envelopeData.inbox.filter(l => l.isNew).length;
     const newSpacetimeCount = envelopeData.spacetime.filter(l => l.isNew).length;
     const outboxBadge = document.getElementById('env-outbox-badge');
@@ -308,7 +313,7 @@ function renderInboxList() {
                     ${isNew ? '<span style="background:rgba(255,255,0.3);color:#fff;font-size:9px;padding:1px 5px;border-radius:6px;margin-left:6px;">新</span>' : ''}
                 </div>
                 <div class="env-stamp">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.8)" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,0.8)" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
                 </div>
             </div>
             ${origPreview ? `<div style="padding:6px 12px 0;display:flex;align-items:flex-start;gap:6px;"><div style="width:2px;border-radius:2px;background:rgba(var(--accent-color-rgb),0.4);flex-shrink:0;align-self:stretch;min-height:14px;margin-top:1px;"></div><div style="font-size:11px;color:var(--text-secondary);font-style:italic;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:calc(100% - 14px);opacity:0.75;">原信: ${origPreview}</div></div>` : ''}
@@ -327,7 +332,7 @@ function renderSpacetimeList() {
     if (!list) return;
     if (envelopeData.spacetime.length === 0) {
         list.innerHTML = `<div class="env-empty">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 0 014-10z"/><path d="M2 12h20"/></svg>
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/><path d="M2 12h20"/></svg>
             <div style="font-size:14px;font-weight:500;margin-top:4px;">还没有收到时空来信</div>
             <div style="font-size:12px;margin-top:6px;opacity:0.6;">开启"主动给我写信"后，系统会随机给你写信~</div>
         </div>`;
@@ -343,12 +348,12 @@ function renderSpacetimeList() {
         <div class="env-letter-item ${hasReplied ? 'reply' : ''} ${isNew ? 'env-letter-new' : ''}" onclick="viewEnvLetter('spacetime','${letter.id}')">
             <div class="env-letter-header">
                 <div class="env-letter-header-from">
-                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;margin-right:3px;"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 0 014-10z"/><path d="M2 12h20"/></svg>
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;margin-right:3px;"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/><path d="M2 12h20"/></svg>
                     时空 · ${date}
                     ${isNew ? '<span style="background:rgba(255,255,0.3);color:#fff;font-size:9px;padding:1px 5px;border-radius:6px;margin-left:6px;">新</span>' : ''}
                 </div>
                 <div class="env-stamp">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.8)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 0 014-10z"/><path d="M2 12h20"/></svg>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,0.8)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/><path d="M2 12h20"/></svg>
                 </div>
             </div>
             <div class="env-letter-body">
@@ -444,7 +449,8 @@ window.viewEnvLetter = function(section, id) {
     const origText = document.getElementById('env-view-original-text');
     const origExpand = document.getElementById('env-view-original-expand');
     if (origCtx && origText) {
-        // inbox 显示原信内容
+        // inbox 显示 originalContent（用户寄出的信）
+        // outbox 如果是回复，显示 replyToSection 和 replyToId 对应的原信
         let originalContent = '';
         if (section === 'inbox' && letter.originalContent) {
             originalContent = letter.originalContent;
@@ -499,16 +505,15 @@ window.saveEnvEdit = function() {
         letter.content = newContent;
         saveEnvelopeData();
         const textEl = document.getElementById('env-view-text');
-        if (textEl) text.textContent = newContent;
+        if (textEl) textEl.textContent = newContent;
         showNotification('已保存修改', 'success');
         toggleEnvEdit();
     }
 };
 
 window.closeEnvViewModal = function() {
-    const modal = document.getElementById('envelope-view-modal');
-    hideModal(modal);
-    if(typeof clearChatView === 'function') clearChatView();
+    hideModal(document.getElementById('envelope-view-modal'));
+    fullChatClear();
 };
 
 // 回复时空来信（或收到的回信）
@@ -533,7 +538,7 @@ window.replyToEnvLetter = function() {
         // 使用自定义设置或默认值计算回信时间
         let minMs = 10 * 60 * 60 * 1000, maxMs = 24 * 60 * 1000;
         if (typeof settings !== 'undefined' && settings.envelopeCustomRuleEnabled) {
-            const unitToMs = { minutes: 60 * 1000, hours: 60 * 60 * 1000, days: 24 * 60 * 1000 };
+            const unitToMs = { minutes: 60 * 1000, hours: 60 * 60 * 1000, days: 24 * 60 * 60 * 1000 };
             const minVal = settings.envelopeReplyMinVal || 10;
             const maxVal = settings.envelopeReplyMaxVal || 24;
             const minUnit = unitToMs[settings.envelopeReplyMinUnit] || unitToMs.hours;
@@ -571,7 +576,7 @@ window.replyToEnvLetter = function() {
 
         showNotification(`回信已寄出，正在加急寄给 ${pName} ✉️`, 'success');
         hideModal(document.getElementById('envelope-view-modal'));
-        if(typeof clearChatView === 'function') clearChatView();
+        fullChatClear();
         renderEnvelopeLists();
         return;
     }
@@ -602,7 +607,7 @@ window.deleteEnvLetter = function(event, section, id) {
     }
     saveEnvelopeData();
     renderEnvelopeLists();
-    if(typeof clearChatView === 'function') clearChatView();
+    fullChatClear();
     showNotification('已删除', 'success');
 };
 
@@ -623,7 +628,7 @@ window.cancelEnvelopeCompose = function() {
     document.getElementById('env-outbox-section').style.display = currentEnvTab === 'outbox' ? 'block' : 'none';
     document.getElementById('env-inbox-section').style.display = currentEnvTab === 'inbox' ? 'block' : 'none';
     document.getElementById('env-spacetime-section').style.display = currentEnvTab === 'spacetime' ? 'block' : 'none';
-    if(typeof clearChatView === 'function') clearChatView();
+    fullChatClear();
 };
 
 function handleSendEnvelope() {
@@ -634,7 +639,7 @@ function handleSendEnvelope() {
     const scheduleSend = document.getElementById('env-schedule-send').checked;
     const scheduleTimeInput = document.getElementById('env-schedule-time').value;
 
-    // 检查定时时间
+    // 检查是否定时发送
     let scheduleTime = null;
     if (scheduleSend && scheduleTimeInput) {
         scheduleTime = new Date(scheduleTimeInput).getTime();
@@ -648,8 +653,8 @@ function handleSendEnvelope() {
         addMessage({ id: Date.now(), sender: 'user', text: `【寄出的信】\n${text}`, timestamp: new Date(), status: 'sent', type: 'normal' });
     }
 
-    // 计算回信间隔
-    let minMs = 10 * 60 * 60 * 1000, maxMs = 24 * 60 * 1000;
+    // 使用自定义设置或默认值
+    let minMs = 10 * 60 * 60 * 1000, maxMs = 24 * 60 * 60 * 1000;
     if (typeof settings !== 'undefined' && settings.envelopeCustomRuleEnabled) {
         const unitToMs = { minutes: 60 * 1000, hours: 60 * 60 * 1000, days: 24 * 60 * 1000 };
         const minVal = settings.envelopeReplyMinVal || 10;
@@ -663,12 +668,14 @@ function handleSendEnvelope() {
     const replyTime = Date.now() + randomMs;
     const newId = 'env_' + Date.now() + '_' + Math.random().toString(36).substr(2,4);
 
+    // 创建信件对象
     const letterObj = {
         id: newId, content: text,
         sentTime: Date.now(), replyTime,
         status: 'pending'
     };
 
+    // 如果是定时发送，添加 schedule 相关字段
     if (scheduleSend && scheduleTime) {
         letterObj.scheduleTime = scheduleTime;
         letterObj.status = 'scheduled';
@@ -691,7 +698,7 @@ function handleSendEnvelope() {
     }
 }
 
-// 时空来信：系统自动生成
+// 时空来信：系统随机写信给用户（使用回复库）
 function generateRandomEnvelopeLetter() {
     const sourcePool = [...customReplies];
     if (sourcePool.length === 0) {
@@ -699,27 +706,33 @@ function generateRandomEnvelopeLetter() {
         return;
     }
     
+    // 随机选择 5-12 句话合成一段信件，统一使用句号
     const sentenceCount = Math.floor(Math.random() * 8) + 5;
     let sentences = [];
     for (let i = 0; i < sentenceCount; i++) {
         const randomSentence = sourcePool[Math.floor(Math.random() * sourcePool.length)];
         sentences.push(randomSentence + '。');
     }
+    // 合成一段，在句号后随机插入换行（确保不拆分句子）
     let content = sentences.join('');
+    // 找到所有句号的位置
     const periodPositions = [];
     for (let i = 0; i < content.length; i++) {
         if (content[i] === '。') periodPositions.push(i);
     }
+    // 随机选择 1-3 个句号位置插入换行
     const breakCount = Math.min(Math.floor(Math.random() * 3) + 1, periodPositions.length);
     const shuffledPositions = periodPositions.sort(() => Math.random() - 0.5);
     for (let b = 0; b < breakCount; b++) {
         const pos = shuffledPositions[b] + 1;
         content = content.substring(0, pos) + '\n' + content.substring(pos);
+        // 更新后续位置（因为插入了字符）
         for (let j = b + 1; j < shuffledPositions.length; j++) {
             if (shuffledPositions[j] > pos) shuffledPositions[j]++;
         }
     }
     
+    // 创建信件放入时空来信
     const newLetter = {
         id: 'auto_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
         content: content.trim(),
@@ -730,13 +743,16 @@ function generateRandomEnvelopeLetter() {
     envelopeData.spacetime.push(newLetter);
     saveEnvelopeData();
     
+    // 显示通知
     if (typeof showNotification === 'function') {
         showNotification('📬 收到一封来自时空的信件！', 'success');
     }
     
+    // 如果信封模态框打开，刷新列表
     if (currentEnvTab === 'spacetime') {
         renderEnvelopeLists();
     }
 }
 
+// 暴露到全局
 window.generateRandomEnvelopeLetter = generateRandomEnvelopeLetter;
