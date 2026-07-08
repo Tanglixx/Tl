@@ -1,3 +1,100 @@
+// =====================【新增：会话隔离顶层代码，放在文件最开头】====================
+/**
+ * 会话隔离存储：每个联系人独立消息、草稿，解决切换串台
+ * 不删除原有 messages，做兼容过渡
+ */
+const SessionDataPool = {};
+let activeChatSid = null; // 当前打开的聊天对象唯一ID
+let pageMsgList = [];     // 当前页面渲染专属消息（替代全局共用messages）
+
+// 全局会话操作工具（envelope.js 可跨文件调用）
+window.SessionTool = {
+    // 获取/初始化会话数据
+    getSession(sid) {
+        if (!SessionDataPool[sid]) {
+            const storageKey = `chat_session_${sid}`;
+            const raw = localStorage.getItem(storageKey);
+            SessionDataPool[sid] = raw ? JSON.parse(raw) : {
+                msgArr: [],
+                inputDraft: ""
+            };
+        }
+        return SessionDataPool[sid];
+    },
+    // 保存当前会话到本地存储
+    saveSession(sid) {
+        const storageKey = `chat_session_${sid}`;
+        localStorage.setItem(storageKey, JSON.stringify(SessionDataPool[sid]));
+    },
+    // 新增消息并绑定归属会话
+    pushMsg(sid, msgObj) {
+        const s = this.getSession(sid);
+        msg.bindSessionId = sid; // 标记消息属于哪个联系人
+        s.msgArr.push(msgObj);
+        this.saveSession(sid);
+    }
+};
+
+/**
+ * 全局聊天页面完整清理函数（供envelope调用）
+ * 清空气泡、输入、搜索、弹窗，无刷新
+ */
+window.fullChatClear = function() {
+    const chatBox = document.querySelector(".chat-content");
+    if (chatBox) chat.innerHTML = "";
+    const input = document.querySelector(".chat-input, .message-input");
+    if (input) input.value = "";
+    // 清空搜索区域
+    const searchInput = document.getElementById("msg-search-input");
+    const searchResult = document.getElementById("msg-search-results");
+    if (searchInput) searchInput.value = "";
+    if (searchResult) searchResult.innerHTML = "";
+    // 销毁所有悬浮信封/提示
+    document.querySelectorAll(".envelope-pop,.chat-tip").forEach(el => el.remove());
+    // 重置统计日历视图
+    if (typeof renderMsgTimeline === "function") renderMsgTimeline();
+}
+
+/**
+ * 切换聊天对象专用函数（你项目原有switchChatTarget自行替换调用此方法，全程不刷新页面）
+ * 参数：targetSid=联系人唯一ID，userName=对方昵称
+ */
+function switchChatSession(targetSid, userName) {
+    // 1. 存档上一个会话数据
+    if (activeChatSid) {
+        const oldSession = SessionTool.getSession(activeChatSid);
+        old.msgArr = [...pageMsgList];
+        const inputDom = document.querySelector(".chat-input");
+        old.inputDraft = inputDom ? input.value : "";
+        SessionTool.saveSession(activeChatSid);
+    }
+    // 2. 清空页面所有DOM与临时数据
+    fullChatClear();
+    pageMsgList = [];
+    // 3. 切换激活会话
+    activeChatSid = targetSid;
+    const newSession = SessionTool.getSession(targetSid);
+    pageMsgList = [...newSession.msgArr];
+    // 恢复上次输入草稿
+    const inputDom = document.querySelector(".chat-input");
+    if (inputDom) input.value = newSession.inputDraft;
+    // 刷新聊天头部名称、重渲染当前联系人消息
+    renderChatHeader(userName);
+    renderMessages(false);
+}
+
+/**
+ * 新增消息统一入口（替换原有直接push全局messages）
+ * 所有发信/AI/信封消息统一调用，自动绑定会话
+ */
+function addSessionMessage(msg) {
+    if (!activeChatSid) return;
+    SessionTool.pushMsg(activeChatSid, msg);
+    pageMsgList.push(msg);
+    renderMessages(true);
+}
+// ==============================================================================
+
 window.switchStatsTab = function(tab) {
     var statsPanel = document.getElementById('stats-panel');
     var favoritesPanel = document.getElementById('favorites-panel');
@@ -77,7 +174,7 @@ function saveGroupChatSettings() {
     try {
         localStorage.setItem('groupChatSettings', JSON.stringify(toSave));
     } catch(e) {
-        console.warn('groupChatSettings保存失败:', e);
+        console.warn('groupChatSettings localStorage保存失败:', e);
     }
     if (window.localforage) {
         members.forEach(function(m) {
@@ -99,8 +196,8 @@ function renderGroupMembersList() {
     list.innerHTML = groupChatSettings.members.map(function(m, i) {
         var avatarHtml = m.avatar
             ? '<img src="' + m.avatar + '" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">'
-            : '<div style="width:36px;height:36px;border-radius:50%;background:rgba(var(--accent-color),0.15);display:flex;align-items:center;justify-content:center;"><i class="fas fa-user" style="font-size:14px;color:var(--accent-color);"></i></div>';
-        return '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--primary-bg);border:1px solid var(--border-color);border-radius:10;">'
+            : '<div style="width:36px;height:36px;border-radius:50%;background:rgba(var(--accent-color-rgb),0.15);display:flex;align-items:center;justify-content:center;"><i class="fas fa-user" style="font-size:14px;color:var(--accent-color);"></i></div>';
+        return '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--primary-bg);border:1px solid var(--border-color);border-radius:10px;">'
             + avatarHtml
             + '<span style="flex:1;font-size:13px;font-weight:500;">' + (m.name || '成员' + (i+1)) + '</span>'
             + '<button onclick="openEditGroupMember(' + i + ')" style="background:none;border:none;cursor:pointer;color:var(--accent-color);font-size:14px;padding:4px 8px;"><i class="fas fa-edit"></i></button>'
@@ -136,7 +233,7 @@ function updateGroupModeUI() {
         avatarKnob.style.right = groupChatSettings.showAvatar ? '3px' : '19px';
     }
     var namePill = document.getElementById('group-show-name-pill');
-    var nameKnob = document.getElementById('show-name-knob');
+    var nameKnob = document.getElementById('group-show-name-knob');
     if (namePill) {
         namePill.style.background = groupChatSettings.showName ? 'var(--accent-color)' : 'var(--border-color)';
         nameKnob.style.right = groupChatSettings.showName ? '3px' : '19px';
@@ -194,7 +291,7 @@ window.openEditGroupMember = function(idx) {
     var member = groupChatSettings.members[idx];
     if (!member) return;
     _groupMemberAvatarDataUrl = member.avatar || null;
-    document.getElementById('group-member-edit-title').textContent = '编辑成员';
+    document.getElementById('group-member-edit-title').text = '编辑成员';
     document.getElementById('group-member-name-input').value = member.name || '';
     document.getElementById('group-member-edit-index').value = idx;
     var preview = document.getElementById('group-member-avatar-preview');
@@ -267,7 +364,7 @@ if (exportAllBtn) {
                     <div style="font-size:15px;font-weight:700;color:var(--text-primary);margin-bottom:4px;display:flex;align-items:center;gap:8px;">
                         <i class="fas fa-archive" style="color:var(--accent-color);font-size:14px;"></i>全量备份导出
                     </div>
-                    <div style="font-size:12px;color:var(--text-secondary);margin-bottom:16px;">默认导出为 ZIP：backup.json 仅存结构与引用，大图在 media/，避免单文件 JSON 过大导致无法解析。</div>
+                    <div style="font-size:12px;color:var(--text-secondary);margin-bottom:16px;">默认导出为 <strong>ZIP</strong>：<code style="font-size:11px;">backup.json</code> 仅存结构与引用，大图在 <code style="font-size:11px;">media/</code>，避免单文件 JSON 过大导致无法解析。</div>
                     <div style="display:flex;flex-direction:column;gap:9px;margin-bottom:20px;">
                         <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:10px 12px;border:1px solid var(--border-color);border-radius:12px;background:var(--primary-bg);font-size:13px;color:var(--text-primary);">
                             <input type="checkbox" id="_bk_msgs" checked style="accent-color:var(--accent-color);width:15px;height:15px;">
@@ -289,7 +386,7 @@ if (exportAllBtn) {
                             <i class="fas fa-calendar-heart" style="color:var(--accent-color);width:16px;text-align:center;"></i>
                             <span>纪念日 / 倒计时</span>
                         </label>
-                        <label style="display:flex;align-items:center;gap:10px;cursor:padding:10px 12px;border:1px solid var(--border-color);border-radius:12px;background:var(--primary-bg);font-size:13px;color:var(--text-primary);">
+                        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:10px 12px;border:1px solid var(--border-color);border-radius:12px;background:var(--primary-bg);font-size:13px;color:var(--text-primary);">
                             <input type="checkbox" id="_bk_themes" checked style="accent-color:var(--accent-color);width:15px;height:15px;">
                             <i class="fas fa-palette" style="color:var(--accent-color);width:16px;text-align:center;"></i>
                             <span>自定义主题 / 方案</span>
@@ -310,7 +407,7 @@ if (exportAllBtn) {
                             <span>Home美化</span>
                         </label>
                         <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:10px 12px;border:1px solid var(--border-color);border-radius:12px;background:var(--primary-bg);font-size:13px;color:var(--text-primary);">
-                            <input type="checkbox" id="_bk_moyu" checked style="accent-color:var(--accent-color);width:15px;height:15px;">
+                            <input type="checkbox" id="_bk_moyu" checked style="accent-color;width:15px;height:15px;">
                             <i class="fas fa-briefcase" style="color:var(--accent-color);width:16px;text-align:center;"></i>
                             <span>摸鱼小记</span>
                         </label>
@@ -358,7 +455,7 @@ if (exportAllBtn) {
                     <div style="display:flex;gap:10px;">
                         <button id="_bk_cancel" style="flex:1;padding:11px;border:1px solid var(--border-color);border-radius:12px;background:none;color:var(--text-secondary);font-size:13px;cursor:pointer;font-family:var(--font-family);">取消</button>
                         <button id="_bk_confirm" style="flex:2;padding:11px;border:none;border-radius:12px;background:var(--accent-color);color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-family);display:flex;align-items:center;justify-content:center;gap:7px;">
-                            <i class="fas fa-download"></i>导出备份
+                            <i class="fas fa-download"></i>导出
                         </button>
                     </div>
                 </div>`;
@@ -418,7 +515,7 @@ if (exportAllBtn) {
                             inclAccounting: inclAccounting,
                             inclEnvelope: inclEnvelope
                         });
-                        const jsonString = ChatBackup.serializeBackupV4(payload);
+                        const jsonString = ChatBackup.serializeBackupV4;
                         const dateStr = new Date().toISOString().slice(0, 10);
                         const fileName = `chatapp-backup-${dateStr}.json`;
                         const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8' });
@@ -467,11 +564,15 @@ if (importAllBtn) {
 
                     await ChatBackup.applyBackupToStorage(backup, { selective: false });
 
-                    if (typeof showNotification === 'function') showNotification('恢复成功，即将刷新', 'success', 2000);
-                    setTimeout(function() { location.reload(); }, 2000);
-                } catch (err) {
+                    if (typeof showNotification === 'function') showNotification('数据恢复成功', 'success', 2000);
+                    // 【修复】删除页面刷新，改用内存重载
+                    if (activeChatSid) {
+                        pageMsgList = SessionTool.getSession(activeChatSid).msgArr;
+                        renderMessages(false);
+                    }
+                } catch (err)
                     var msg = err && err.message ? err.message : '未知错误';
-                    if (typeof showNotification === 'function') showNotification('导入失败：' + msg, 'error', 5000);
+                    if (typeof showNotification === 'function') showNotification('导入失败：' + msg, 'error');
                     console.error('导入报错:', err);
                 }
             };
@@ -530,8 +631,8 @@ window._runMsgSearch = function() {
     var from = dateFrom && dateFrom.value ? new Date(dateFrom.value) : null;
     var to = dateTo && dateTo.value ? new Date(dateTo + 'T23:59:59') : null;
 
-    var allMessages = (typeof messages !== 'undefined' ? messages : [])
-        .filter(function(m) { return m.type !== 'system'; });
+    // 【修复】搜索只读取当前会话消息，不再全局messages
+    var allMessages = [...pageMsgList].filter(function(m) { return m.type !== 'system'; });
 
     var filtered = allMessages.filter(function(m) {
         var matchText = !q || (m.text && m.text.toLowerCase().includes(q)) || (m.image && !q);
@@ -544,12 +645,12 @@ window._runMsgSearch = function() {
     });
 
     if (!q && !from && !to) {
-        resultsEl.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-secondary);font-size:13px;">输入关键词或日期搜索</div>';
+        resultsEl.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-secondary);font-size:13px;">输入关键词或日期开始搜索</div>';
         return;
     }
 
     if (filtered.length === 0) {
-        resultsEl.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-secondary);font-size:13px;">未匹配到消息</div>';
+        resultsEl.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-secondary);font-size:13px;">未找到相关消息</div>';
         return;
     }
 
@@ -564,7 +665,7 @@ window._runMsgSearch = function() {
         if (!q || !text) return (text || '').replace(/</g,'&lt;').replace(/>/g,'&gt;');
         var safe = text.replace(/</g,'&lt;').replace(/>/g,'&gt;');
         var safeQ = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        return safe.replace(new RegExp('(' + safeQ + ')', 'gi'), '<mark style="background:rgba(var(--accent-color-rgb,180,140,100),0.3);border-radius:2px;padding:0 1px;">$1</mark>');
+        return safe.replace(new RegExp('(' + safeQ + ')', 'gi'), '<mark style="background:rgba(var(--accent-color-rgb,180,140,0.3);border-radius:2px;padding:0 1px;">$1</mark>');
     }
 
     resultsEl.innerHTML = filtered.map(function(msg) {
@@ -585,8 +686,8 @@ window._runMsgSearch = function() {
         }) : '';
 
         var avatarHtml = avatar
-            ? '<img src="' + avatar + '" style="width:34px;height:34px;border-radius:50%;object-fit:cover;">'
-            : '<div style="width:34px;height:34px;border-radius:50%;background:rgba(var(--accent-color-rgb,180,140,100),0.18);display:flex;align-items:center;justify-content:center;"><i class="fas fa-user" style="font-size:14px;color:var(--accent-color);"></i></div>';
+            ? '<img src="' + avatar + '" style="width:34px;height:34px;border-radius:50%;object-fit:cover;flex-shrink:0;">'
+            : '<div style="width:34px;height:34px;border-radius:50%;background:rgba(var(--accent-color-rgb,180,140,0.18);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><i class="fas fa-user" style="font-size:14px;color:var(--accent-color);"></i></div>';
 
         var contentHtml = '';
         if (msg.text) contentHtml += '<div style="font-size:13px;color:var(--text-primary);line-height:1.5;word-break:break-word;margin-top:3px;">' + highlight(msg.text) + '</div>';
@@ -604,7 +705,7 @@ window._runMsgSearch = function() {
     }).join('');
 
     resultsEl.insertAdjacentHTML('afterbegin',
-        '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;padding:0 2px;">共找到 ' + filtered.length + ' 条记录</div>'
+        '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;padding:0 2px;">共找到 ' + filtered.length + ' 条结果</div>'
     );
 };
 
@@ -628,24 +729,23 @@ window.scrollToMessage = function(msgId) {
         if (el) {
             el.scrollIntoView({ behavior: 'smooth', block: 'center' });
             el.style.transition = 'background 0.3s';
-            el.style.background = 'rgba(var(--accent-color-rgb,180,140,100),0.18)';
+            el.style.background = 'rgba(var(--accent-color-rgb,180,140,0.18)';
             setTimeout(function() { el.style.background = ''; }, 1500);
         } else {
             var msgIndex = -1;
-            if (typeof messages !== 'undefined') {
-                for (var i = 0; i < messages.length; i++) {
-                    if (String(messages[i].id) === String(msgId)) {
-                        msgIndex = i;
-                        break;
-                    }
+            // 【修复】仅查找当前会话消息
+            for (var i = 0; i < pageMsgList.length; i++) {
+                if (String(pageMsgList[i].id) === String(msgId)) {
+                    msgIndex = i;
+                    break;
                 }
             }
             if (msgIndex === -1) {
-                if (typeof showNotification === 'function') showNotification('消息已不存在', 'info');
+                if (typeof showNotification === 'function') showNotification('消息可能已被删除', 'info');
                 return;
             }
             if (typeof displayedMessageCount !== 'undefined') {
-                var needed = messages.length - msgIndex;
+                var needed = pageMsgList.length - msgIndex;
                 if (needed > displayedMessageCount) {
                     displayedMessageCount = needed + 10;
                     if (typeof renderMessages === 'function') renderMessages(false);
@@ -654,10 +754,10 @@ window.scrollToMessage = function(msgId) {
                         if (el2) {
                             el2.scrollIntoView({ behavior: 'smooth', block: 'center' });
                             el2.style.transition = 'background 0.3s';
-                            el2.style.background = 'rgba(var(--accent-color-rgb,180,140,100),0.18)';
+                            el2.style.background = 'rgba(var(--accent-color-rgb,180,140,0.18)';
                             setTimeout(function() { el2.style.background = ''; }, 1500);
                         } else {
-                            if (typeof showNotification === 'function') showNotification('定位失败', 'info');
+                            if (typeof showNotification === 'function') showNotification('消息定位失败', 'info');
                         }
                     }, 200);
                 }
@@ -666,7 +766,7 @@ window.scrollToMessage = function(msgId) {
     }, 350);
 };
 
-/* ===== 消息统计日历热力图 ===== */
+/* ===== 消息统计 - 日历热力图 ===== */
 (function() {
     var _tlYear = new Date().getFullYear();
     var _tlMonth = new Date().getMonth();
@@ -674,10 +774,10 @@ window.scrollToMessage = function(msgId) {
     function getHeatColor(count, maxCount) {
         if (count === 0) return 'transparent';
         var ratio = maxCount > 0 ? count / maxCount : 0;
-        if (ratio <= 0.2) return 'rgba(var(--accent-color-rgb, 180,140,100), 0.2)';
-        if (ratio <= 0.4) return 'rgba(var(--accent-color-rgb, 180,140,100), 0.4)';
-        if (ratio <= 0.7) return 'rgba(var(--accent-color-rgb, 180,140,100), 0.65)';
-        return 'rgba(var(--accent-color-rgb, 180,140,100), 0.9)';
+        if (ratio <= 0.2) return 'rgba(var(--accent-color-rgb, 180,140,0.2)';
+        if (ratio <= 0.4) return 'rgba(var(--accent-color-rgb, 180,140,0.4)';
+        if (ratio <= 0.7) return 'rgba(var(--accent-color-rgb, 180,140,0.65)';
+        return 'rgba(var(--accent-color-rgb, 180,140,0.9)';
     }
 
     function countMessagesByDay(year, month) {
@@ -686,9 +786,9 @@ window.scrollToMessage = function(msgId) {
         var lastDay = new Date(year, month + 1, 0);
         var firstDayTime = firstDay.getTime();
         var lastDayTime = last.getTime() + 86400000 - 1;
-
-        if (typeof messages !== 'undefined' && messages.length > 0) {
-            messages.forEach(function(msg) {
+        // 【修复】统计仅当前会话消息
+        if (pageMsgList.length > 0) {
+            pageMsgList.forEach(function(msg) {
                 if (msg.timestamp && msg.type !== 'system') {
                     var t = new Date(msg.timestamp).getTime();
                     if (t >= firstDayTime && t <= lastDayTime) {
@@ -703,9 +803,9 @@ window.scrollToMessage = function(msgId) {
     }
 
     function getFirstMsgIdOfDay(dateStr) {
-        if (typeof messages === 'undefined' || messages.length === 0) return null;
-        for (var i = 0; i < messages.length; i++) {
-            var msg = messages[i];
+        // 【修复】仅遍历当前会话消息
+        for (var i = 0; i < pageMsgList.length; i++) {
+            var msg = pageMsgList[i];
             if (msg.timestamp && msg.type !== 'system') {
                 var d = new Date(msg.timestamp);
                 var key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -725,17 +825,17 @@ window.scrollToMessage = function(msgId) {
 
         var year = _tlYear;
         var month = _tlMonth;
-        var firstDay = new Date(year, month, 1);
-        var lastDay = new Date(year, month + 1, 0);
-        var startWeekday = firstDay.getDay();
-        var daysInMonth = lastDay.getDate();
+        var firstDayOfMonth = new Date(year, month, 1);
+        var lastDayOfMonth = new Date(year, month + 1, 0);
+        var startWeekday = firstDayOfMonth.getDay();
+        var daysInMonth = lastDayOfMonth.getDate();
 
         var today = new Date();
         var todayStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
 
-        var monthNames = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
-        var totalMonthMsgs = values.reduce(function(a,b){return a+b},0);
-        var activeDays = values.filter(v=>v>0).length;
+        var monthNames = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
+        var totalMonthMsgs = values.reduce(function(a, b) { return a + b; }, 0);
+        var activeDays = values.filter(function(v) { return v > 0; }).length;
 
         var html = '';
         html += '<div class="tl-calendar-header">';
@@ -745,120 +845,116 @@ window.scrollToMessage = function(msgId) {
         html += '</div>';
         html += '<div class="tl-summary-row">';
         html += '  <div class="tl-summary-item"><span class="tl-summary-value">' + totalMonthMsgs + '</span><span class="tl-summary-label">条消息</span></div>';
-        html += '  <div class="tl-summary-item"><span class="tl-summary-value">' + activeDays + '</span><span class="tl-summary-label">活跃天</span></div>';
-        html += '  <div class="tl-summary-item"><span class="tl-summary-value">' + (activeDays>0?Math.round(totalMonthMsgs/activeDays):0) + '</span><span class="tl-summary-label">日均</span></div>';
+        html += '  <div class="tl-summary-item"><span class="tl-summary-value">' + activeDays + '</span><span class="tl-summary-label">天活跃</span></div>';
+        html += '  <div class="tl-summary-item"><span class="tl-summary-value">' + (activeDays > 0 ? Math.round(totalMonthMsgs / activeDays) : 0) + '</span><span class="tl-summary-label">日均</span></div>';
         html += '</div>';
-        html += '<div class="tl-cal-weekdays"><div>日</div><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div></div>';
+        html += '<div class="tl-cal-weekdays">';
+        html += '  <div>日</div><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div>';
+        html += '</div>';
         html += '<div class="tl-cal-grid">';
-        for(var i=0;i<startWeekday;i++) html += '<div class="tl-cal-day empty"></div>';
-        for(var day=1;day<=daysInMonth;day++){
-            var dateStr = year + '-' + String(month+1).padStart(2,'0') + '-' + String(day).padStart(2,'0');
+        for (var i = 0; i < startWeekday; i++) {
+            html += '<div class="tl-cal-day empty"></div>';
+        }
+        for (var day = 1; day <= daysInMonth; day++) {
+            var dateStr = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
             var count = counts[dateStr] || 0;
-            var bg = getHeatColor(count, maxCount);
-            var isToday = dateStr === todayStr;
+            var bgColor = getHeatColor(count, maxCount);
+            var isToday = (dateStr === todayStr);
             var hasMsg = count > 0;
             var firstId = hasMsg ? getFirstMsgIdOfDay(dateStr) : null;
-            var cls = 'tl-cal-day' + (isToday?' today':'') + (hasMsg?' has-msg':'');
-            html += '<div class="' + cls + '" data-date="' + dateStr + '" data-count="' + count + '" ' + (firstId?'onclick="window._jumpToDayMsg('+firstId+')"':'') + ' style="background:' + bg + '">';
-            html += '<span class="tl-day-num">' + day + '</span>';
-            if(count>0) html += '<span class="tl-day-count">' + count + '</span>';
+
+            var classes = 'tl-cal-day';
+            if (isToday) classes += ' today';
+            if (hasMsg) classes += ' has-msg';
+
+            html += '<div class="' + classes + '" data-date="' + dateStr + '" data-count="' + count + '"';
+            if (firstId) {
+                html += ' onclick="window._jumpToDayMsg(' + firstId + ')"';
+            }
+            html += ' style="background-color:' + bgColor + ';">';
+            html += '  <span class="tl-day-num">' + day + '</span>';
+            if (count > 0) {
+                html += '  <span class="tl-day-count">' + count + '</span>';
+            }
             html += '</div>';
         }
         html += '</div>';
         html += '<div class="tl-legend">';
-        html += '<span class="tl-legend-label">少</span>';
-        html += '<div class="tl-legend-block" style="background:rgba(var(--accent-color-rgb,180,140,100),0.08)"></div>';
-        html += '<div class="tl-legend-block" style="background:rgba(var(--accent-color-rgb,180,140,100),0.2)"></div>';
-        html += '<div class="tl-legend-block" style="background:rgba(var(--accent-color-rgb,180,140,100),0.4)"></div>';
-        html += '<div class="tl-legend-block" style="background:rgba(var(--accent-color-rgb,180,140,100),0.65)"></div>';
-        html += '<div class="tl-legend-block" style="background:rgba(var(--accent-color-rgb,180,140,100),0.9)"></div>';
-        html += '<span class="tl-legend-label">多</span>';
+        html += '  <span class="tl-legend-label">少</span>';
+        html += '  <div class="tl-legend-block" style="background:rgba(var(--accent-color-rgb,180,140,0.08);"></div>';
+        html += '  <div class="tl-legend-block" style="background:rgba(var(--accent-color-rgb,180,140,0.2);"></div>';
+        html += '  <div class="tl-legend-block" style="background:rgba(var(--accent-color-rgb,180,140,0.4);"></div>';
+        html += '  <div class="tl-legend-block" style="background:rgba(var(--accent-color-rgb,180,140,0.65);"></div>';
+        html += '  <div class="tl-legend-block" style="background:rgba(var(--accent-color-rgb,180,140,0.9);"></div>';
+        html += '  <span class="tl-legend-label">多</span>';
         html += '</div>';
+
         container.innerHTML = html;
 
         var prevBtn = document.getElementById('tl-prev-month');
         var nextBtn = document.getElementById('tl-next-month');
-        if(prevBtn) prevBtn.onclick = function(){ _tlMonth--; if(_tlMonth<0){_tlMonth=11;_tlYear--;} renderMsgTimeline(); };
-        if(nextBtn) nextBtn.onclick = function(){ _tlMonth++; if(_tlMonth>11){_tlMonth=0;_tlYear++;} renderMsgTimeline(); };
+        if (prevBtn) prevBtn.onclick = function() {
+            _tlMonth--;
+            if (_tlMonth < 0) { _tlMonth = 11; _tlYear--; }
+            renderMsgTimeline();
+        };
+        if (nextBtn) nextBtn.onclick = function() {
+            _tlMonth++;
+            if (_tlMonth > 11) { _tlMonth = 0; _tlYear++; }
+            renderMsgTimeline();
+        };
     };
 
     window._jumpToDayMsg = function(msgId) {
         var statsModal = document.getElementById('stats-modal');
         if (statsModal) {
             var content = statsModal.querySelector('.modal-content');
-            if(content){
+            if (content) {
                 content.style.opacity = '0';
                 content.style.transform = 'translateY(20px) scale(0.95)';
             }
-            clearTimeout(statsModal._hideTimeout);
-            statsModal._hideTimeout = setTimeout(()=>statsModal.style.display='none',300);
+            if (statsModal._hideTimeout) clearTimeout(statsModal._hideTimeout);
+            statsModal._hideTimeout = setTimeout(function() {
+                statsModal.style.display = 'none';
+            }, 300);
         }
-        setTimeout(function(){
+
+        setTimeout(function() {
             var el = document.querySelector('[data-id="' + msgId + '"]') || document.querySelector('[data-msg-id="' + msgId + '"]');
-            if(el){
-                el.scrollIntoView({behavior:'smooth',block:'center'});
+            if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 el.style.transition = 'background 0.3s';
-                el.style.background = 'rgba(var(--accent-color-rgb,180,140,100),0.18)';
-                setTimeout(()=>el.style.background='',1500);
-            }else{
-                var idx = -1;
-                if(typeof messages !== 'undefined') for(var i=0;i<messages.length;i++) if(String(messages[i].id)===String(msgId)){idx=i;break;}
-                if(idx===-1){if(showNotification)showNotification('消息不存在','info');return;}
-                if(typeof displayedMessageCount !== 'undefined'){
-                    var need = messages.length - idx;
-                    if(need>displayedMessageCount){
-                        displayedMessageCount = need+10;
-                        if(renderMessages) renderMessages(false);
-                        setTimeout(function(){
+                el.style.background = 'rgba(var(--accent-color-rgb,180,140,0.18)';
+                setTimeout(function() { el.style.background = ''; }, 1500);
+            } else {
+                var msgIndex = -1;
+                for (var i = 0; i < pageMsgList.length; i++) {
+                    if (String(pageMsgList[i].id) === String(msgId)) {
+                        msgIndex = i;
+                        break;
+                    }
+                }
+                if (msgIndex === -1) {
+                    if (typeof showNotification === 'function') showNotification('消息不存在', 'info');
+                    return;
+                }
+                if (typeof displayedMessageCount !== 'undefined') {
+                    var needed = pageMsgList.length - msgIndex;
+                    if (needed > displayedMessageCount) {
+                        displayedMessageCount = needed + 10;
+                        if (typeof renderMessages === 'function') renderMessages(false);
+                        setTimeout(function() {
                             var el2 = document.querySelector('[data-id="' + msgId + '"]') || document.querySelector('[data-msg-id="' + msgId + '"]');
-                            if(el2){
-                                el2.scrollIntoView({behavior:'smooth',block:'center'});
+                            if (el2) {
+                                el2.scrollIntoView({ behavior: 'smooth', block: 'center' });
                                 el2.style.transition = 'background 0.3s';
-                                el2.style.background = 'rgba(var(--accent-color-rgb,180,140,100),0.18)';
-                                setTimeout(()=>el2.style.background='',1500);
-                            }else if(showNotification) showNotification('定位失败','info');
-                        },200);
+                                el2.style.background = 'rgba(var(--accent-color-rgb,180,140,0.18)';
+                                setTimeout(function() { el2.style.background = ''; }, 1500);
+                            } else if (typeof showNotification === 'function') showNotification('定位失败', 'info');
+                        }, 200);
                     }
                 }
             }
-        },350);
+        }, 350);
     };
 })();
-
-// ===================== 【新增 会话隔离持久化工具，放在文件最末尾】 =====================
-const ChatLocalStore = {
-    // 根据会话唯一ID获取历史消息
-    get(sessionId) {
-        const key = `chat_history_${sessionId}`;
-        const data = localStorage.getItem(key);
-        return data ? JSON.parse(data) : [];
-    },
-    // 完整覆盖保存当前会话全部消息
-    save(sessionId, msgArr) {
-        const key = `chat_history_${sessionId}`;
-        localStorage.setItem(key, JSON.stringify(msg));
-    },
-    // 单条消息增量追加
-    addSingleMsg(sessionId, msgObj) {
-        const list = this.get(sessionId);
-        list.push(msgObj);
-        this.save(sessionId, list);
-    },
-    // 保存输入草稿
-    saveInput(sessionId, text) {
-        localStorage.setItem(`chat_draft_${sessionId}`, text || "");
-    },
-    // 读取草稿
-    getInput(sessionId) {
-        return localStorage.getItem(`chat_draft_${sessionId}`) || "";
-    }
-};
-
-// 仅清空页面视觉DOM，不操作本地存储历史记录
-function clearChatView() {
-    const chatBox = document.querySelector(".chat-content");
-    if (chatBox) chat.innerHTML = "";
-    document.querySelectorAll(".envelope-pop,.chat-tip").forEach(el => el.remove());
-    const input = document.querySelector(".chat-input");
-    if (input) input.value = "";
-}
